@@ -202,7 +202,6 @@ if __name__ == '__main__':
     apply_rotation(args, directory, extension)
     
     #only do metadata regeneration step if the file is a dicom
-    extension = os.path.splitext(args.inVol)
     if extension[1] == '.dcm' and args.slimm:
         metadata(args.inVol, directory)
 
