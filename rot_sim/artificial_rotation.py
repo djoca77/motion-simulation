@@ -5,14 +5,17 @@ import math
 import argparse
 import numpy as np
 import subprocess
+import math
 
-def apply_rotation(args):
+def apply_rotation(args, dir, extension):
     """
     Resample volume, creating a copy of the reference volume rotated in a sinusoidal fashion
     """
 
-    os.remove('rotation.csv')
-    f = open('rotation.csv', 'w') #reopen in append mode
+    if os.path.exists('parameters.csv'):
+        os.remove('parameters.csv')
+
+    f = open('parameters.csv', 'w') #open in write mode
 
     try:
         reference = sitk.ReadImage(args.inVol) #read in vol
@@ -26,30 +29,38 @@ def apply_rotation(args):
     reader.LoadPrivateTagsOn()
     reader.ReadImageInformation()
 
-    #get file extension for saving purporses
-    extension = os.path.splitext(args.inVol)
-
     for i in range(int(args.num_dicoms)):        
         # Center of volume.
         reference_center = reference.TransformContinuousIndexToPhysicalPoint(
             [(index-1)/2.0 for index in reference.GetSize()] )
 
         transform = sitk.AffineTransform(3)
-        transform.SetCenter(reference_center)
-        # Rotation 2D :
-        # R = (cos t, -sin t, sin t, cos t)
-        # x = 0, y = 1, z = 2
-        # 0,1 yaw (z)
-        # 0,2 pitch (y)
-        # 1,2 roll (x)
+        
         sin = math.sin(0.2*i) 
-        angle = args.angle_max * sin
-        axis0 = 0 
-        axis1 = 1
-        theta = np.radians( angle )
+        angle_x = math.radians(float(args.angle_x)) * sin
+        angle_y = math.radians(float(args.angle_y)) * sin
+        angle_z = math.radians(float(args.angle_z)) * sin
+        # Rotation matrix around the X-axis
+        rotation_x = [[1, 0, 0],
+                    [0, np.cos(angle_x), -np.sin(angle_x)],
+                    [0, np.sin(angle_x), np.cos(angle_x)]]
 
-        #resample volume using simulated rotation
-        transform.Rotate(axis0, axis1, theta)
+        # Rotation matrix around the Y-axis
+        rotation_y = [[np.cos(angle_y), 0, np.sin(angle_y)],
+                    [0, 1, 0],
+                    [-np.sin(angle_y), 0, np.cos(angle_y)]]
+
+        # Rotation matrix around the Z-axis
+        rotation_z = [[np.cos(angle_z), -np.sin(angle_z), 0],
+                    [np.sin(angle_z), np.cos(angle_z), 0],
+                    [0, 0, 1]]
+
+        # Combine rotations: R = Rz * Ry * Rx (order matters)
+        combined_rotation = np.dot(rotation_z, np.dot(rotation_y, rotation_x))
+        transform.SetMatrix(np.ravel(combined_rotation))
+        
+        transform.SetCenter(reference_center)
+
         resampler = sitk.ResampleImageFilter()
         resampler.SetTransform(transform)
         resampler.SetOutputDirection(reference.GetDirection())
@@ -64,11 +75,11 @@ def apply_rotation(args):
         for j in (reader.GetMetaDataKeys()):
             transformed_image.SetMetaData(j, reader.GetMetaData(j))
 
-        sitk.WriteImage(transformed_image, f'./rotated_vols/rotated_{str(i).zfill(4)}{extension[1]}')
-        print(f'Volume Rotation {i}, Rotation Angle: {angle} Degrees')
+        sitk.WriteImage(transformed_image, os.path.join(dir, f'rotated_{str(i).zfill(4)}{extension[1]}'))
+        print(f'Volume {i} Rotation: Rotation X: {math.degrees(angle_x)} Degrees, Rotation Y: {math.degrees(angle_y)} Degrees, Rotation Z: {math.degrees(angle_z)} Degrees')
 
         # plot simulated motion transformations for a reference plot, only if the flag is used
-        if args.refplot: write_simulated_data(f, args, theta, i)
+        write_simulated_data(f, args, (angle_x, angle_y, angle_z), i, reference_center)
 
     f.close()
         
@@ -118,42 +129,60 @@ def vvr(refVol, voldir):
         vol = os.path.join(voldir, volname)
         outTransFile = str(i).zfill(4)
 
-        subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
-        refVol,
-        inputTransformFileName,
-        outTransFile,
-        vol] )
+        if i == 0: #use identity-centered.tfm for only the first registration
+            subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
+            refVol,
+            inputTransformFileName,
+            outTransFile,
+            vol] )
+        else: #use the most recent written transform file for the next registration
+            inputTransformFileName = f"sliceTransform{str(i - 1).zfill(4)}.tfm"
+
+            print( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
+            refVol,
+            inputTransformFileName,
+            outTransFile,
+            vol] )
+
+            subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
+            refVol,
+            inputTransformFileName,
+            outTransFile,
+            vol] )
 
 
-def write_simulated_data(f, args, theta, i):
+def write_simulated_data(f, args, theta, i, center):
         #resample slice using translation transform
-        transform_array =(0,0,theta,0,0,0)
+        transform_array = theta + (0,0,0)
         a = np.asarray(transform_array).reshape(1,-1)
         np.savetxt(f, a, delimiter=",",fmt="%.8f")
-        transform1 = sitk.VersorRigid3DTransform()
-        transform1.SetCenter((0,0,0)) #center of rotation
-        transform1.SetParameters(transform_array)
-        sitk.WriteTransform(transform1, f'./{str(i).zfill(4)}.tfm')
+        
+        if args.refplot:
+            transform1 = sitk.VersorRigid3DTransform()
+            transform1.SetCenter(center) #center of rotation
+            transform1.SetParameters(transform_array)
+            sitk.WriteTransform(transform1, f'./{str(i).zfill(4)}.tfm')
 
-        if i == (args.num_dicoms - 1):
-            dirmapping_a = os.getcwd() + ":" + "/data"
-            dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
+            if i == (args.num_dicoms - 1):
+                dirmapping_a = os.getcwd() + ":" + "/data"
+                dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
 
-            subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "0000.tfm"])
-            # Loop through files in the directory
-            for filename in os.listdir(os.getcwd()):
-                if filename.endswith(".tfm"):
-                    os.remove(filename)
+                subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "0000.tfm"])
+                # Loop through files in the directory
+                for filename in os.listdir(os.getcwd()):
+                    if filename.endswith(".tfm"):
+                        os.remove(filename)
 
-
-print('Cropping Complete')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-inVol', default='./input/adultjosh.dcm', help='input folder with single dicom file that is duplicated')
+    
     parser.add_argument('-num_dicoms', default=40, help='number of output dicoms')
-    parser.add_argument('-angle_max', default=20, help='maximum angle of rotation in degrees')
+    parser.add_argument('-angle_x', default=0, help='maximum angle of rotation in degrees x-axis (roll)')
+    parser.add_argument('-angle_y', default=0, help='maximum angle of rotation in degrees, y-axis (pitch)')
+    parser.add_argument('-angle_z', default=20, help='maximum angle of rotation in degrees, z-axis (yaw)')
 
     parser.add_argument('--vvr', action='store_true', help='flag for performing volume to volume registration')
     parser.add_argument('--refplot', action='store_true', help='flag for creating plot of simulated motion')
@@ -166,8 +195,11 @@ if __name__ == '__main__':
     if not os.path.exists(directory):
         os.makedirs(directory)
 
+    #get file extension for saving purporses
+    extension = os.path.splitext(args.inVol)
+    
     # apply artificial rotation
-    apply_rotation(args)
+    apply_rotation(args, directory, extension)
     
     #only do metadata regeneration step if the file is a dicom
     extension = os.path.splitext(args.inVol)

@@ -39,10 +39,9 @@ def apply_translation(args):
     size = reference.GetSize() #returns 3D size array
     num_slices = int(size[2])
 
-    f = open('translation.csv', 'w') #open csv file in write mode
-    f.truncate() #erase anything in it
-    f.close() #close
-    f = open('translation.csv', 'a') #reopen in append mode
+    if os.path.exists('parameters.csv'):   
+        os.remove('parameters.csv') #remove
+    f = open('parameters.csv', 'a') #reopen in append mode
 
     transformed_image = sitk.Image(reference) #create a copy of volume to modify with slice motion
 
