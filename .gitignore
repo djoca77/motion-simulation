@@ -1,0 +1,16 @@
+# Ignore all DICOM files
+*.dcm
+
+# Ignore all Nifti files
+*.nii
+*.nii.gz
+
+# Ignore all MRD files
+*.h5
+
+# Ignore all CSV files
+*.csv
+
+# Ignore all png and log from motion tracker
+*.png
+*.log
