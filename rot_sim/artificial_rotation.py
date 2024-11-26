@@ -29,7 +29,7 @@ def apply_rotation(args, dir, extension):
     reader.LoadPrivateTagsOn()
     reader.ReadImageInformation()
 
-    for i in range(int(args.num_dicoms)):        
+    for i in range(args.num_dicoms):        
         # Center of volume.
         reference_center = reference.TransformContinuousIndexToPhysicalPoint(
             [(index-1)/2.0 for index in reference.GetSize()] )
@@ -37,9 +37,9 @@ def apply_rotation(args, dir, extension):
         transform = sitk.AffineTransform(3)
         
         sin = math.sin(0.2*i) 
-        angle_x = math.radians(float(args.angle_x)) * sin
-        angle_y = math.radians(float(args.angle_y)) * sin
-        angle_z = math.radians(float(args.angle_z)) * sin
+        angle_x = math.radians(args.angle_x) * sin
+        angle_y = math.radians(args.angle_y) * sin
+        angle_z = math.radians(args.angle_z) * sin
         # Rotation matrix around the X-axis
         rotation_x = [[1, 0, 0],
                     [0, np.cos(angle_x), -np.sin(angle_x)],
@@ -179,10 +179,10 @@ if __name__ == '__main__':
 
     parser.add_argument('-inVol', default='./input/adultjosh.dcm', help='input folder with single dicom file that is duplicated')
     
-    parser.add_argument('-num_dicoms', default=40, help='number of output dicoms')
-    parser.add_argument('-angle_x', default=0, help='maximum angle of rotation in degrees x-axis (roll)')
-    parser.add_argument('-angle_y', default=0, help='maximum angle of rotation in degrees, y-axis (pitch)')
-    parser.add_argument('-angle_z', default=20, help='maximum angle of rotation in degrees, z-axis (yaw)')
+    parser.add_argument('-num_dicoms', default=40, type=int, help='number of output dicoms')
+    parser.add_argument('-angle_x', default=0, type=float, help='maximum angle of rotation in degrees x-axis (roll)')
+    parser.add_argument('-angle_y', default=0, type=float, help='maximum angle of rotation in degrees, y-axis (pitch)')
+    parser.add_argument('-angle_z', default=20, type=float, help='maximum angle of rotation in degrees, z-axis (yaw)')
 
     parser.add_argument('--vvr', action='store_true', help='flag for performing volume to volume registration')
     parser.add_argument('--refplot', action='store_true', help='flag for creating plot of simulated motion')
