@@ -6,6 +6,8 @@ import numpy as np
 from pydicom import dcmread
 import subprocess
 
+
+
 def apply_translation(args, dir, extension):
     """
     Resample volume, creating a copy of the reference volume translated in a sinusoidal fashion
@@ -40,7 +42,7 @@ def apply_translation(args, dir, extension):
         resampler.SetOutputDirection(reference.GetDirection())
         resampler.SetOutputSpacing(reference.GetSpacing())
         resampler.SetSize(reference.GetSize())
-        resampler.SetInterpolator(sitk.sitkLinear)
+        resampler.SetInterpolator(sitk.sitkBSpline)
         resampler.SetDefaultPixelValue(0.0) 
         resampler.SetOutputPixelType(reference.GetPixelID())
         transformed_image = resampler.Execute(reference)
@@ -56,6 +58,7 @@ def apply_translation(args, dir, extension):
         write_simulated_data(f, args, translation_array, i)
 
     f.close()
+
 
 def metadata(inVol, indirectory):
     files = os.listdir(indirectory)
@@ -81,6 +84,7 @@ def metadata(inVol, indirectory):
         dicom.save_as(path)
     print("Metadata Augmentation Complete")
 
+
 def vvr(refVol, voldir):
     # list all volume files and sort them in order
     files = os.listdir(voldir)
@@ -102,27 +106,13 @@ def vvr(refVol, voldir):
     for i, volname in enumerate(files):
         vol = os.path.join(voldir, volname)
         outTransFile = str(i).zfill(4)
+        
+        subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
+        refVol,
+        inputTransformFileName,
+        outTransFile,
+        vol] )
 
-        if i == 0: #use identity-centered.tfm for only the first registration
-            subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
-            refVol,
-            inputTransformFileName,
-            outTransFile,
-            vol] )
-        else: #use the most recent written transform file for the next registration
-            inputTransformFileName = f"sliceTransform{str(i - 1).zfill(4)}.tfm"
-
-            print( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
-            refVol,
-            inputTransformFileName,
-            outTransFile,
-            vol] )
-
-            subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
-            refVol,
-            inputTransformFileName,
-            outTransFile,
-            vol] )
 
 def write_simulated_data(f, args, translation_array, i):
         #write to csv file the 6 parameters
@@ -145,6 +135,7 @@ def write_simulated_data(f, args, translation_array, i):
                 for filename in os.listdir(os.getcwd()):
                     if filename.endswith(".tfm"):
                         os.remove(filename)
+
 
 
 if __name__ == '__main__':

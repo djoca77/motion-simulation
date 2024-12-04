@@ -14,7 +14,6 @@ def apply_rotation(args, dir, extension):
 
     if os.path.exists('parameters.csv'):
         os.remove('parameters.csv')
-
     f = open('parameters.csv', 'w') #open in write mode
 
     try:
@@ -29,14 +28,17 @@ def apply_rotation(args, dir, extension):
     reader.LoadPrivateTagsOn()
     reader.ReadImageInformation()
 
-    for i in range(args.num_dicoms):        
+    for i in range(args.num_vols):        
         # Center of volume.
         reference_center = reference.TransformContinuousIndexToPhysicalPoint(
             [(index-1)/2.0 for index in reference.GetSize()] )
 
         transform = sitk.AffineTransform(3)
-        
-        sin = math.sin(0.2*i) 
+
+        sin = math.sin((args.period/args.num_vols) * i)
+        translation_array = ((args.x * sin), (args.y * sin), (args.z * sin))
+        transform.SetTranslation(translation_array)
+
         angle_x = math.radians(args.angle_x) * sin
         angle_y = math.radians(args.angle_y) * sin
         angle_z = math.radians(args.angle_z) * sin
@@ -75,11 +77,17 @@ def apply_rotation(args, dir, extension):
         for j in (reader.GetMetaDataKeys()):
             transformed_image.SetMetaData(j, reader.GetMetaData(j))
 
-        sitk.WriteImage(transformed_image, os.path.join(dir, f'rotated_{str(i).zfill(4)}{extension[1]}'))
+        if args.crop:
+            transformed_image = crop(transformed_image)
+
+        sitk.WriteImage(transformed_image, os.path.join(dir, f'simulated_{str(i).zfill(4)}{extension[1]}'))
+
         print(f'Volume {i} Rotation: Rotation X: {math.degrees(angle_x)} Degrees, Rotation Y: {math.degrees(angle_y)} Degrees, Rotation Z: {math.degrees(angle_z)} Degrees')
+        print(f'Volume {i} Translation: Translation X: {translation_array[0]} mm, Translation Y: {translation_array[1]} mm, Translation Z: {translation_array} mm')
+        print("\n")
 
         # plot simulated motion transformations for a reference plot, only if the flag is used
-        write_simulated_data(f, args, (angle_x, angle_y, angle_z), i, reference_center)
+        write_simulated_data(f, args, (angle_x, angle_y, angle_z), translation_array, i, reference_center)
 
     f.close()
         
@@ -128,7 +136,7 @@ def vvr(refVol, voldir):
     for i, volname in enumerate(files):
         vol = os.path.join(voldir, volname)
         outTransFile = str(i).zfill(4)
-
+       
         subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
         refVol,
         inputTransformFileName,
@@ -136,10 +144,9 @@ def vvr(refVol, voldir):
         vol] )
 
 
-
-def write_simulated_data(f, args, theta, i, center):
+def write_simulated_data(f, args, rot, trans, i, center):
         #resample slice using translation transform
-        transform_array = theta + (0,0,0)
+        transform_array = rot + trans
         a = np.asarray(transform_array).reshape(1,-1)
         np.savetxt(f, a, delimiter=",",fmt="%.8f")
         
@@ -149,7 +156,7 @@ def write_simulated_data(f, args, theta, i, center):
             transform1.SetParameters(transform_array)
             sitk.WriteTransform(transform1, f'./{str(i).zfill(4)}.tfm')
 
-            if i == (args.num_dicoms - 1):
+            if i == (args.num_vols - 1):
                 dirmapping_a = os.getcwd() + ":" + "/data"
                 dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
 
@@ -160,30 +167,46 @@ def write_simulated_data(f, args, theta, i, center):
                         os.remove(filename)
 
 
+def crop(image):
+    low = [25, 15, 0] # X, Y, Z pixels respectively
+    up = [25, 8, 0] # X, Y, Z pixels respectively
+    cropped = sitk.Crop(image, low, up)
+
+    return cropped
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-inVol', default='./input/adultjosh.dcm', help='input folder with single dicom file that is duplicated')
     
-    parser.add_argument('-num_dicoms', default=40, type=int, help='number of output dicoms')
-    parser.add_argument('-angle_x', default=0, type=float, help='maximum angle of rotation in degrees x-axis (roll)')
-    parser.add_argument('-angle_y', default=0, type=float, help='maximum angle of rotation in degrees, y-axis (pitch)')
-    parser.add_argument('-angle_z', default=20, type=float, help='maximum angle of rotation in degrees, z-axis (yaw)')
+    parser.add_argument('-num_vols', default=40, type=int, help='number of output dicoms, default is 40')
 
+    parser.add_argument('-angle_x', default=0, type=float, help='maximum angle of rotation in degrees x-axis (roll). Number can be integer or decimal')
+    parser.add_argument('-angle_y', default=0, type=float, help='maximum angle of rotation in degrees, y-axis (pitch). Number can be integer or decimal')
+    parser.add_argument('-angle_z', default=0, type=float, help='maximum angle of rotation in degrees, z-axis (yaw). Number can be integer or decimal')
+
+    parser.add_argument('-x', default=2, type=float, help='x-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
+    parser.add_argument('-y', default=0, type=float, help='y-axis translation sin wave magnitude. default is 0. Number can be integer or fldecimaloat')
+    parser.add_argument('-z', default=0, type=float, help='z-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
+
+    parser.add_argument('-period', default= 2*math.pi, type=float, help='period of sinusoidal motion, default is 2pi. Number can be integer or decimal') 
+    
     parser.add_argument('--vvr', action='store_true', help='flag for performing volume to volume registration')
     parser.add_argument('--refplot', action='store_true', help='flag for creating plot of simulated motion')
     parser.add_argument('--slimm', action='store_true', help='flag to perform metadata regeneration on dicom images to use on slimm')
+    parser.add_argument('--crop', action='store_true', help='flag to perform cropping on images')
 
     args = parser.parse_args()
 
     # create output directory if it does not exist yet
-    directory = "rotated_vols"
+    directory = "simulated_vols"
     if not os.path.exists(directory):
         os.makedirs(directory)
 
     #get file extension for saving purporses
     extension = os.path.splitext(args.inVol)
-    
+
     # apply artificial rotation
     apply_rotation(args, directory, extension)
     

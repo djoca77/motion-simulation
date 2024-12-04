@@ -4,10 +4,9 @@ import math
 import argparse
 import numpy as np
 import subprocess
-import sys
+from pydicom import dcmread
 
-def interleaved_array(size, interleaved):
-    interleaved_factor = interleaved
+def interleaved_array(size, interleaved_factor):
     interleaved_array = []
     current_value = 0
     base_value = 0
@@ -23,6 +22,16 @@ def interleaved_array(size, interleaved):
         print(current_value)
 
     return interleaved_array
+
+def aquisition_time(args):
+    dcm = dcmread(args.invol)
+    uSliceTime = np.empty(len(dcm.PerFrameFunctionalGroupsSequence))
+    for iSlice in range(len(dcm.PerFrameFunctionalGroupsSequence)):
+        uSliceTime[iSlice] = float(dcm.PerFrameFunctionalGroupsSequence[iSlice].FrameContentSequence[0].FrameAcquisitionDateTime) 
+    
+    sortedSliceTime = [i for i, _ in sorted(enumerate(uSliceTime), key=lambda x: x[1])]
+
+    return sortedSliceTime
 
 def apply_translation(args, dir, extension):
     '''
@@ -45,17 +54,23 @@ def apply_translation(args, dir, extension):
 
     transformed_image = sitk.Image(reference) #create a copy of volume to modify with slice motion
 
-    interleaved = interleaved_array(num_slices, args.interleaved) #creates interleaved array depending on sms factor that determines the order of slices
-    print(interleaved)
+    if extension[1] == '.dcm':
+        indices = aquisition_time(args) #creates array of indexes based on the aquisition time of the slices to create a better simulation of the data
+    elif args.interleaved:
+        indices = interleaved_array(num_slices, args.interleaved_factor) #creates interleaved array depending on sms factor that determines the order of slices
+    else:
+        indices = list(range(num_slices))
+    
+    print(f'Order of slices: {indices}')
 
-    for i, idx in enumerate(interleaved): #for every slice in the volume
+    for i, idx in enumerate(indices): #for every slice in the volume
         #extract slice
         startIndex = (0, 0, idx)
         sizeROI = (size[0], size[1], 1)
         image = sitk.RegionOfInterest(reference, sizeROI, startIndex)
 
         #create 3D array of sinusoidal motion to be applied translationally to slice
-        sin = math.sin(( 2 * math.pi / ( num_slices /  args.sms )) * ( idx )) #// int(args.sms)) FOR SIMULTANEOUS ACQUISITION SIMULATION TAKES THE FLOOR SO IT GOES 0 0 1 1 2 2 3 3 ETC
+        sin = math.sin(( 2 * math.pi / ( num_slices /  args.sms_factor )) * ( i // args.sms_factor)) #// int(args.sms)) FOR SIMULTANEOUS ACQUISITION SIMULATION TAKES THE FLOOR SO IT GOES 0 0 1 1 2 2 3 3 ETC
         translation_array = ((args.x * sin), (args.y * sin), 0)
         transform = sitk.AffineTransform(3)
         transform.SetTranslation(translation_array)
@@ -64,28 +79,15 @@ def apply_translation(args, dir, extension):
         slice_center = image.TransformContinuousIndexToPhysicalPoint(
             [(index-1)/2.0 for index in image.GetSize()] )
 
-        angle_x = math.radians(args.angle_x) * sin
-        angle_y = math.radians(args.angle_y) * sin
         angle_z = math.radians(args.angle_z) * sin
-        # Rotation matrix around the X-axis
-        rotation_x = [[1, 0, 0],
-                    [0, np.cos(angle_x), -np.sin(angle_x)],
-                    [0, np.sin(angle_x), np.cos(angle_x)]]
-
-        # Rotation matrix around the Y-axis
-        rotation_y = [[np.cos(angle_y), 0, np.sin(angle_y)],
-                    [0, 1, 0],
-                    [-np.sin(angle_y), 0, np.cos(angle_y)]]
 
         # Rotation matrix around the Z-axis
         rotation_z = [[np.cos(angle_z), -np.sin(angle_z), 0],
                     [np.sin(angle_z), np.cos(angle_z), 0],
                     [0, 0, 1]]
 
-        # Combine rotations: R = Rz * Ry * Rx (order matters)
-        combined_rotation = np.dot(rotation_z, np.dot(rotation_y, rotation_x))
-        transform.SetMatrix(np.ravel(combined_rotation))
-        
+        # Set Rotation matrix and Center
+        transform.SetMatrix(np.ravel(rotation_z))
         transform.SetCenter(slice_center)
 
         #resample slice using translation transform, setting origin, direction cosine matrix, spacing, size, interpolator, defaultpixelvalue
@@ -95,7 +97,7 @@ def apply_translation(args, dir, extension):
         resampler.SetOutputDirection(image.GetDirection())
         resampler.SetOutputSpacing(image.GetSpacing())
         resampler.SetSize(image.GetSize())
-        resampler.SetInterpolator(sitk.sitkLinear)
+        resampler.SetInterpolator(sitk.sitkBSpline)
         resampler.SetDefaultPixelValue(0.0) 
         transformed_slice = resampler.Execute(image)
 
@@ -103,9 +105,23 @@ def apply_translation(args, dir, extension):
         transformed_image = sitk.Paste(transformed_image, transformed_slice, transformed_slice.GetSize(), destinationIndex=[0, 0, idx])
 
         sitk.WriteImage(transformed_slice, os.path.join(dir, f'slices_{str(i).zfill(4)}{extension[1]}') ) #write slice to directory
-        print(f'Slice Translation {i}')
 
-        write_simulated_data(f, args, (angle_x, angle_y, angle_z), translation_array, i, slice_center)
+        print(f'Slice Translation {idx}, Translation X {translation_array[0]}, Translation Y {translation_array[1]}')
+        print(f'Slice Rotation {idx}, Rotation Z {angle_z}')
+        print('\n')
+
+        write_simulated_data(f, args, (0, 0, angle_z), translation_array, i, slice_center)
+
+    #create reference plots if flag is up
+    if args.refplot:
+        dirmapping_a = os.getcwd() + ":" + "/data"
+        dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
+
+        subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "0000.tfm"])
+        # Loop through files in the directory
+        for filename in os.listdir(os.getcwd()):
+            if filename.endswith(".tfm"):
+                os.remove(filename)
 
     if not os.path.exists('intra_vol'):
         os.makedirs('intra_vol')
@@ -156,17 +172,6 @@ def write_simulated_data(f, args, rot, trans, i, center):
             transform1.SetParameters(transform_array)
             sitk.WriteTransform(transform1, f'./{str(i).zfill(4)}.tfm')
 
-            if i == (args.num_vols - 1):
-                dirmapping_a = os.getcwd() + ":" + "/data"
-                dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
-
-                subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "0000.tfm"])
-                # Loop through files in the directory
-                for filename in os.listdir(os.getcwd()):
-                    if filename.endswith(".tfm"):
-                        os.remove(filename)
-
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -175,14 +180,13 @@ if __name__ == '__main__':
     
     parser.add_argument('-x', default = 2, type=float, help='x-axis translation sin wave magnitude')
     parser.add_argument('-y', default = 0, type=float, help='y-axis translation sin wave magnitude')
+    parser.add_argument('-angle_z', default=0, type=float, help='maximum angle of rotation in degrees, z-axis (yaw). Number can be integer or decimal')
 
-    parser.add_argument('-angle_x', default=0, type=float, help='maximum angle of rotation in degrees x-axis (roll). Number can be integer or decimal')
-    parser.add_argument('-angle_y', default=0, type=float, help='maximum angle of rotation in degrees, y-axis (pitch). Number can be integer or decimal')
-    parser.add_argument('-angle_z', default=5, type=float, help='maximum angle of rotation in degrees, z-axis (yaw). Number can be integer or decimal')
+    parser.add_argument('-sms_factor', type=int, help='SMS factor. Important for proper motion simulation. Used for fMRI scans') 
+    parser.add_argument('--interleaved', action='store_true', help='Flag to add an interleaving factor to change the order of slices')
+    parser.add_argument('-interleaved_factor', type=int, help='Interleaved factor. Must be divisible by the number of slices in the volume. Used for HASTE scans')
 
     parser.add_argument('--svr', action="store_true", help='Flag to perform slice to volume registration')
-    parser.add_argument('-sms', type=int, help='SMS factor. Important for proper motion simulation. MUST BE AN INTEGER') 
-    parser.add_argument('-interleaved', type=int, help='Interleaved factor. Must be divisible by the number of slices in the volume. Used for haste scans')
     parser.add_argument('--refplot', action='store_true', help='create plots of simulated data for a reference')
 
     args = parser.parse_args()
@@ -198,7 +202,7 @@ if __name__ == '__main__':
 
     #perform svr and motion monitor if the flag is used
     if args.svr:
-        svr(args.invol, directory, args.sms)
+        svr(args.invol, directory, args.sms_factor)
 
         # Motion monitor
         os.remove("identity-centered.tfm")

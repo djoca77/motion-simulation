@@ -35,7 +35,7 @@ def apply_rotation(args, dir, extension):
 
         transform = sitk.AffineTransform(3)
 
-        sin = math.sin(args.period * i)
+        sin = math.sin((args.period/args.num_vols) * i)
         translation_array = ((args.x * sin), (args.y * sin), (args.z * sin))
         transform.SetTranslation(translation_array)
 
@@ -69,7 +69,7 @@ def apply_rotation(args, dir, extension):
         resampler.SetOutputOrigin(reference.GetOrigin())
         resampler.SetOutputSpacing(reference.GetSpacing())
         resampler.SetSize(reference.GetSize())
-        resampler.SetInterpolator(sitk.sitkLinear)
+        resampler.SetInterpolator(sitk.sitkBSpline)
         resampler.SetDefaultPixelValue(0.0)
 
         transformed_image = resampler.Execute(reference)
@@ -175,7 +175,7 @@ if __name__ == '__main__':
     parser.add_argument('-angle_y', default=0, type=float, help='maximum angle of rotation in degrees, y-axis (pitch). Number can be integer or decimal')
     parser.add_argument('-angle_z', default=10, type=float, help='maximum angle of rotation in degrees, z-axis (yaw). Number can be integer or decimal')
 
-    parser.add_argument('-x', default=2.5, type=float, help='x-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
+    parser.add_argument('-x', default=0, type=float, help='x-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
     parser.add_argument('-y', default=0, type=float, help='y-axis translation sin wave magnitude. default is 0. Number can be integer or fldecimaloat')
     parser.add_argument('-z', default=0, type=float, help='z-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
 
