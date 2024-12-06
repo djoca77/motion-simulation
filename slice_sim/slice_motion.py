@@ -5,6 +5,7 @@ import argparse
 import numpy as np
 import subprocess
 from pydicom import dcmread
+from scipy.spatial.transform import Rotation
 
 def interleaved_array(size, interleaved_factor):
     interleaved_array = []
@@ -99,6 +100,7 @@ def apply_translation(args, dir, extension):
         resampler.SetSize(image.GetSize())
         resampler.SetInterpolator(sitk.sitkBSpline)
         resampler.SetDefaultPixelValue(0.0) 
+        resampler.SetOutputPixelType(reference.GetPixelID())
         transformed_slice = resampler.Execute(image)
 
         #take resampled slice and paste into volume copy so that it replaces old, untranslated slice. 
@@ -110,7 +112,10 @@ def apply_translation(args, dir, extension):
         print(f'Slice Rotation {idx}, Rotation Z {angle_z}')
         print('\n')
 
-        write_simulated_data(f, args, (0, 0, angle_z), translation_array, i, slice_center)
+        rot = Rotation.from_euler('xyz', (0, 0, angle_z), degrees=False) #REMEMBER TO CHANGE THE DEGREES FLAG IF NEEDED
+        rot_quat = rot.as_quat()
+
+        write_simulated_data(f, args, list(rot_quat[0:3]), list(translation_array), i, slice_center)
 
     #create reference plots if flag is up
     if args.refplot:
@@ -180,7 +185,7 @@ if __name__ == '__main__':
     
     parser.add_argument('-x', default = 2, type=float, help='x-axis translation sin wave magnitude')
     parser.add_argument('-y', default = 0, type=float, help='y-axis translation sin wave magnitude')
-    parser.add_argument('-angle_z', default=0, type=float, help='maximum angle of rotation in degrees, z-axis (yaw). Number can be integer or decimal')
+    parser.add_argument('-angle_z', default = 0, type=float, help='maximum angle of rotation in degrees, z-axis (yaw). Number can be integer or decimal')
 
     parser.add_argument('-sms_factor', type=int, help='SMS factor. Important for proper motion simulation. Used for fMRI scans') 
     parser.add_argument('--interleaved', action='store_true', help='Flag to add an interleaving factor to change the order of slices')

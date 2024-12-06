@@ -6,6 +6,7 @@ import argparse
 import numpy as np
 import subprocess
 import math
+from scipy.spatial.transform import Rotation
 
 def apply_rotation(args, dir, extension):
     """
@@ -70,9 +71,11 @@ def apply_rotation(args, dir, extension):
         resampler.SetOutputSpacing(reference.GetSpacing())
         resampler.SetSize(reference.GetSize())
         resampler.SetInterpolator(sitk.sitkBSpline)
-        resampler.SetDefaultPixelValue(0.0)
+        resampler.SetDefaultPixelValue(0)
+        resampler.SetOutputPixelType(reference.GetPixelID())
 
         transformed_image = resampler.Execute(reference)
+        transformed_image.CopyInformation(reference)
 
         for j in (reader.GetMetaDataKeys()):
             transformed_image.SetMetaData(j, reader.GetMetaData(j))
@@ -83,11 +86,14 @@ def apply_rotation(args, dir, extension):
         sitk.WriteImage(transformed_image, os.path.join(dir, f'simulated_{str(i).zfill(4)}{extension[1]}'))
 
         print(f'Volume {i} Rotation: Rotation X: {math.degrees(angle_x)} Degrees, Rotation Y: {math.degrees(angle_y)} Degrees, Rotation Z: {math.degrees(angle_z)} Degrees')
-        print(f'Volume {i} Translation: Translation X: {translation_array[0]} mm, Translation Y: {translation_array[1]} mm, Translation Z: {translation_array} mm')
+        print(f'Volume {i} Translation: Translation X: {translation_array[0]} mm, Translation Y: {translation_array[1]} mm, Translation Z: {translation_array[2]} mm')
         print("\n")
 
+        rot = Rotation.from_euler('xyz', (angle_x, angle_y, angle_z), degrees=False) #REMEMBER TO CHANGE THE DEGREES FLAG IF NEEDED
+        rot_quat = rot.as_quat()
+
         # plot simulated motion transformations for a reference plot, only if the flag is used
-        write_simulated_data(f, args, (angle_x, angle_y, angle_z), translation_array, i, reference_center)
+        write_simulated_data(f, args, list(rot_quat[0:3]), list(translation_array), i, reference_center)
 
     f.close()
         
@@ -175,6 +181,23 @@ def crop(image):
     return cropped
 
 
+def resample(args, extension):
+    # host computer : container directory alias
+    dirmapping = os.getcwd() + ":" + "/data"
+    dockerprefix = ["docker","run","--rm", "-it", "--init", "-v", dirmapping,
+        "--user", str(os.getuid())+":"+str(os.getgid())]
+    
+    for i in range(args.num_vols):        
+        subprocess.run(dockerprefix + ["crl/crkit", 
+            "crlResampler", 
+            "-d", 
+            f"simulated_vols/simulated_0000.dcm",
+            f"sliceTransform{str(i).zfill(4)}.tfm", 
+            f"simulated_vols/simulated_0000.dcm", 
+            "bspline", 
+            f"resampled/resampled_{i}.nii" 
+        ])
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
@@ -182,11 +205,11 @@ if __name__ == '__main__':
     
     parser.add_argument('-num_vols', default=40, type=int, help='number of output dicoms, default is 40')
 
-    parser.add_argument('-angle_x', default=0, type=float, help='maximum angle of rotation in degrees x-axis (roll). Number can be integer or decimal')
+    parser.add_argument('-angle_x', default=10, type=float, help='maximum angle of rotation in degrees x-axis (roll). Number can be integer or decimal')
     parser.add_argument('-angle_y', default=0, type=float, help='maximum angle of rotation in degrees, y-axis (pitch). Number can be integer or decimal')
     parser.add_argument('-angle_z', default=0, type=float, help='maximum angle of rotation in degrees, z-axis (yaw). Number can be integer or decimal')
 
-    parser.add_argument('-x', default=2, type=float, help='x-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
+    parser.add_argument('-x', default=0, type=float, help='x-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
     parser.add_argument('-y', default=0, type=float, help='y-axis translation sin wave magnitude. default is 0. Number can be integer or fldecimaloat')
     parser.add_argument('-z', default=0, type=float, help='z-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
 
@@ -220,6 +243,9 @@ if __name__ == '__main__':
     
         # Motion monitor
         os.remove("identity-centered.tfm")
+
+        resample(args, extension[1])
+
         dirmapping_a = os.getcwd() + ":" + "/data"
         dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
 
@@ -228,4 +254,3 @@ if __name__ == '__main__':
         for filename in os.listdir(os.getcwd()):
             if filename.endswith(".tfm"):
                 os.remove(filename)
-

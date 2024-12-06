@@ -69,6 +69,7 @@ def apply_rotation(args, dir, extension):
         resampler.SetSize(reference.GetSize())
         resampler.SetInterpolator(sitk.sitkBSpline)
         resampler.SetDefaultPixelValue(0.0)
+        resampler.SetOutputPixelType(reference.GetPixelID())
 
         transformed_image = resampler.Execute(reference)
 

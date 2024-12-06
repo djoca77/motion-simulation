@@ -71,6 +71,7 @@ def apply_rotation(args, dir, extension):
         resampler.SetSize(reference.GetSize())
         resampler.SetInterpolator(sitk.sitkBSpline)
         resampler.SetDefaultPixelValue(0.0)
+        resampler.SetOutputPixelType(reference.GetPixelID())
 
         transformed_image = resampler.Execute(reference)
 
@@ -164,6 +165,25 @@ def write_simulated_data(f, args, rot, trans, i, center):
                         os.remove(filename)
 
 
+def resample(args, extension):
+    # host computer : container directory alias
+    dirmapping = os.getcwd() + ":" + "/data"
+    dockerprefix = ["docker","run","--rm", "-it", "--init", "-v", dirmapping,
+        "--user", str(os.getuid())+":"+str(os.getgid())]
+    
+    for i in range(args.num_vols):        
+        subprocess.run(dockerprefix + ["crl/crkit", 
+            "crlResampler", 
+            "-d", 
+            f"simulated_vols/simulated_0000.dcm",
+            f"sliceTransform{str(i).zfill(4)}.tfm", 
+            f"simulated_vols/simulated_0000.dcm", 
+            "bspline", 
+            f"resampled/resampled_{i}.nii" 
+        ])
+
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
@@ -208,6 +228,9 @@ if __name__ == '__main__':
     
         # Motion monitor
         os.remove("identity-centered.tfm")
+
+        resample(args, extension[1])
+
         dirmapping_a = os.getcwd() + ":" + "/data"
         dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
 
