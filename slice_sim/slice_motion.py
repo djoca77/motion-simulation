@@ -29,10 +29,14 @@ def aquisition_time(args):
     uSliceTime = np.empty(len(dcm.PerFrameFunctionalGroupsSequence))
     for iSlice in range(len(dcm.PerFrameFunctionalGroupsSequence)):
         uSliceTime[iSlice] = float(dcm.PerFrameFunctionalGroupsSequence[iSlice].FrameContentSequence[0].FrameAcquisitionDateTime) 
+
+    _, counts = np.unique(uSliceTime, return_counts=True)
+    sms = counts.max()
     
     sortedSliceTime = [i for i, _ in sorted(enumerate(uSliceTime), key=lambda x: x[1])]
 
-    return sortedSliceTime
+    return sortedSliceTime, sms
+
 
 def apply_translation(args, dir, extension):
     '''
@@ -54,9 +58,10 @@ def apply_translation(args, dir, extension):
     f = open('parameters.csv', 'w') #reopen in write mode
 
     transformed_image = sitk.Image(reference) #create a copy of volume to modify with slice motion
+    sms = args.sms_factor
 
     if extension[1] == '.dcm':
-        indices = aquisition_time(args) #creates array of indexes based on the aquisition time of the slices to create a better simulation of the data
+        indices, sms = aquisition_time(args) #creates array of indexes based on the aquisition time of the slices to create a better simulation of the data
     elif args.interleaved:
         indices = interleaved_array(num_slices, args.interleaved_factor) #creates interleaved array depending on sms factor that determines the order of slices
     else:
@@ -69,9 +74,10 @@ def apply_translation(args, dir, extension):
         startIndex = (0, 0, idx)
         sizeROI = (size[0], size[1], 1)
         image = sitk.RegionOfInterest(reference, sizeROI, startIndex)
+        
 
         #create 3D array of sinusoidal motion to be applied translationally to slice
-        sin = math.sin(( 2 * math.pi / ( num_slices /  args.sms_factor )) * ( i // args.sms_factor)) #// int(args.sms)) FOR SIMULTANEOUS ACQUISITION SIMULATION TAKES THE FLOOR SO IT GOES 0 0 1 1 2 2 3 3 ETC
+        sin = math.sin(( 2 * math.pi / ( num_slices /  sms )) * ( i // sms)) #// int(args.sms)) FOR SIMULTANEOUS ACQUISITION SIMULATION TAKES THE FLOOR SO IT GOES 0 0 1 1 2 2 3 3 ETC
         translation_array = ((args.x * sin), (args.y * sin), 0)
         transform = sitk.AffineTransform(3)
         transform.SetTranslation(translation_array)

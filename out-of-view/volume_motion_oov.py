@@ -7,6 +7,7 @@ import numpy as np
 import subprocess
 import math
 from scipy.spatial.transform import Rotation
+from pathlib import Path, PurePath
 
 def apply_rotation(args, dir, extension):
     """
@@ -29,14 +30,14 @@ def apply_rotation(args, dir, extension):
     reader.LoadPrivateTagsOn()
     reader.ReadImageInformation()
 
-    for i in range(args.num_vols):        
-        # Center of volume.
-        reference_center = reference.TransformContinuousIndexToPhysicalPoint(
-            [(index-1)/2.0 for index in reference.GetSize()] )
+    # Center of volume.
+    reference_center = reference.TransformContinuousIndexToPhysicalPoint(
+        [(index-1)/2.0 for index in reference.GetSize()] )
 
+    for i in range(args.num_vols):        
         transform = sitk.AffineTransform(3)
 
-        sin = math.sin((args.period/args.num_vols) * i)
+        sin = math.sin((args.period/args.num_vols) * i / 4)
         translation_array = ((args.x * sin), (args.y * sin), (args.z * sin))
         transform.SetTranslation(translation_array)
 
@@ -75,13 +76,12 @@ def apply_rotation(args, dir, extension):
         resampler.SetOutputPixelType(reference.GetPixelID())
 
         transformed_image = resampler.Execute(reference)
-        transformed_image.CopyInformation(reference)
-
-        for j in (reader.GetMetaDataKeys()):
-            transformed_image.SetMetaData(j, reader.GetMetaData(j))
 
         if args.crop:
             transformed_image = crop(transformed_image)
+
+        for j in (reader.GetMetaDataKeys()):
+            transformed_image.SetMetaData(j, reader.GetMetaData(j))
 
         sitk.WriteImage(transformed_image, os.path.join(dir, f'simulated_{str(i).zfill(4)}{extension[1]}'))
 
@@ -180,6 +180,104 @@ def crop(image):
 
     return cropped
 
+def aq_time_indices(refVol):
+    dcm = dcmread(refVol)
+    uSliceTime = np.empty(len(dcm.PerFrameFunctionalGroupsSequence))
+    for iSlice in range(len(dcm.PerFrameFunctionalGroupsSequence)):
+        uSliceTime[iSlice] = float(dcm.PerFrameFunctionalGroupsSequence[iSlice].FrameContentSequence[0].FrameAcquisitionDateTime) 
+
+    _, counts = np.unique(uSliceTime, return_counts=True)
+    sms = counts.max()
+    
+    sortedSliceTime = [i for i, _ in sorted(enumerate(uSliceTime), key=lambda x: x[1])]
+
+    return sortedSliceTime, sms
+
+def vol_to_slice(inVol, out_dir):
+    # Read the input volume
+    inVolume = sitk.ReadImage(inVol)
+    dims = inVolume.GetDimension()
+    if dims != 3:
+        print("Expecting the number of dimensions to be 3.")
+        exit()
+
+    # Ensure the output directory exists
+    output_dir = Path(out_dir).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Process each slice and save
+    sizes = inVolume.GetSize()
+    for i in range(sizes[2]):
+        sliceIndex = i
+        startIndex = (0, 0, sliceIndex)
+        sizeROI = (sizes[0], sizes[1], 1)
+        roiVolume = sitk.RegionOfInterest(inVolume, sizeROI, startIndex)
+
+        # Create the output file name
+        outName = PurePath(out_dir).stem + '-' + str(sliceIndex).zfill(3) + ".nii"
+        outPath = output_dir / outName  # Combine directory and file name
+
+        print(f"Saving slice {sliceIndex} to {outPath}")
+
+        # Write the slice to file
+        writer = sitk.ImageFileWriter()
+        writer.SetFileName(str(outPath))
+        writer.Execute(roiVolume)
+
+    print("All slices saved successfully.")
+
+    return sizes[2]
+
+
+def svr(refVol, voldir, extension):
+    #order files by name
+    files = os.listdir(voldir)
+    files.sort()
+
+    print('refVolumeName is ', str(refVol) )
+
+    # host computer : container directory alias
+    dirmapping = os.getcwd() + ":" + "/data"
+    dockerprefix = ["docker","run","--rm", "-it", "--init", "-v", dirmapping,
+        "--user", str(os.getuid())+":"+str(os.getgid())]
+    print(dockerprefix)
+
+    inputTransformFileName = "identity-centered.tfm"
+    subprocess.run( dockerprefix +  [ "crl/sms-mi-reg", "crl-identity-transform-at-volume-center.py", 
+    "--refvolume", refVol, 
+    "--transformfile", inputTransformFileName ] )
+
+    # depending on sms factor, perform svr with slices, looping through until all slices have been registered
+
+    slice_dir = "slices"
+    if not os.path.exists(slice_dir):
+        os.makedirs(slice_dir)
+    
+    acquisition_time, sms = aq_time_indices(refVol)
+    print(sms)
+    slicelist = []
+
+    for i, file in enumerate(files):
+        filepath = os.path.join(voldir, file)
+        slicepath = os.path.join(slice_dir, f"slice{extension}")
+
+        slice_num = vol_to_slice(filepath, slicepath)
+        slices = os.listdir(slice_dir)
+        slices.sort()
+    
+        for j in range(0, slice_num, sms):
+            indices = acquisition_time[j:j + sms]
+            slicelist = []
+            for index in indices:
+                slicelist.append(os.path.join(slice_dir, slices[index]))
+
+            outTransFile = f"{str(i)}_{str(j).zfill(4)}"
+            
+            subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
+            refVol,
+            inputTransformFileName,
+            outTransFile ] + slicelist )
+
 
 def resample(args, extension):
     # host computer : container directory alias
@@ -191,9 +289,9 @@ def resample(args, extension):
         subprocess.run(dockerprefix + ["crl/crkit", 
             "crlResampler", 
             "-d", 
-            f"simulated_vols/simulated_0000.dcm",
+            f"simulated_vols/simulated_0000{extension}",
             f"sliceTransform{str(i).zfill(4)}.tfm", 
-            f"simulated_vols/simulated_0000.dcm", 
+            f"simulated_vols/simulated_0000{extension}", 
             "bspline", 
             f"resampled/resampled_{i}.nii" 
         ])
@@ -205,20 +303,22 @@ if __name__ == '__main__':
     
     parser.add_argument('-num_vols', default=40, type=int, help='number of output dicoms, default is 40')
 
-    parser.add_argument('-angle_x', default=10, type=float, help='maximum angle of rotation in degrees x-axis (roll). Number can be integer or decimal')
+    parser.add_argument('-angle_x', default=0, type=float, help='maximum angle of rotation in degrees x-axis (roll). Number can be integer or decimal')
     parser.add_argument('-angle_y', default=0, type=float, help='maximum angle of rotation in degrees, y-axis (pitch). Number can be integer or decimal')
     parser.add_argument('-angle_z', default=0, type=float, help='maximum angle of rotation in degrees, z-axis (yaw). Number can be integer or decimal')
 
-    parser.add_argument('-x', default=0, type=float, help='x-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
+    parser.add_argument('-x', default=2, type=float, help='x-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
     parser.add_argument('-y', default=0, type=float, help='y-axis translation sin wave magnitude. default is 0. Number can be integer or fldecimaloat')
     parser.add_argument('-z', default=0, type=float, help='z-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
 
-    parser.add_argument('-period', default= 2*math.pi, type=float, help='period of sinusoidal motion, default is 2pi. Number can be integer or decimal') 
+    parser.add_argument('-period', default=2*math.pi, type=float, help='period of sinusoidal motion, default is 2pi. Number can be integer or decimal') 
     
     parser.add_argument('--vvr', action='store_true', help='flag for performing volume to volume registration')
     parser.add_argument('--refplot', action='store_true', help='flag for creating plot of simulated motion')
     parser.add_argument('--slimm', action='store_true', help='flag to perform metadata regeneration on dicom images to use on slimm')
     parser.add_argument('--crop', action='store_true', help='flag to perform cropping on images')
+    parser.add_argument('--resample', action='store_true', help='flag to perform resampling on images')
+    parser.add_argument('--svr', action='store_true', help='flag to perform svr')
 
     args = parser.parse_args()
 
@@ -244,12 +344,28 @@ if __name__ == '__main__':
         # Motion monitor
         os.remove("identity-centered.tfm")
 
-        resample(args, extension[1])
+        if args.resample: resample(args, extension[1])
 
         dirmapping_a = os.getcwd() + ":" + "/data"
         dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
 
         subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "sliceTransform0000.tfm"])
+        # Loop through files in the directory
+        for filename in os.listdir(os.getcwd()):
+            if filename.endswith(".tfm"):
+                os.remove(filename)
+    elif args.svr:
+        svr(args.inVol, directory, extension[1])
+    
+        # Motion monitor
+        os.remove("identity-centered.tfm")
+
+        if args.resample: resample(args, extension[1])
+
+        dirmapping_a = os.getcwd() + ":" + "/data"
+        dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
+
+        subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "sliceTransform0_0000.tfm"])
         # Loop through files in the directory
         for filename in os.listdir(os.getcwd()):
             if filename.endswith(".tfm"):
