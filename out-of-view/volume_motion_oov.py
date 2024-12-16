@@ -37,7 +37,7 @@ def apply_rotation(args, dir, extension):
     for i in range(args.num_vols):        
         transform = sitk.AffineTransform(3)
 
-        sin = math.sin((args.period/args.num_vols) * i / 4)
+        sin = math.sin((args.period/args.num_vols) * (i) )
         translation_array = ((args.x * sin), (args.y * sin), (args.z * sin))
         transform.SetTranslation(translation_array)
 
@@ -62,7 +62,6 @@ def apply_rotation(args, dir, extension):
         # Combine rotations: R = Rz * Ry * Rx (order matters)
         combined_rotation = np.dot(rotation_z, np.dot(rotation_y, rotation_x))
         transform.SetMatrix(np.ravel(combined_rotation))
-        
         transform.SetCenter(reference_center)
 
         resampler = sitk.ResampleImageFilter()
@@ -83,7 +82,7 @@ def apply_rotation(args, dir, extension):
         for j in (reader.GetMetaDataKeys()):
             transformed_image.SetMetaData(j, reader.GetMetaData(j))
 
-        sitk.WriteImage(transformed_image, os.path.join(dir, f'simulated_{str(i).zfill(4)}{extension[1]}'))
+        sitk.WriteImage(transformed_image, os.path.join(dir, f'simulated_{str(i).zfill(4)}.nii'))
 
         print(f'Volume {i} Rotation: Rotation X: {math.degrees(angle_x)} Degrees, Rotation Y: {math.degrees(angle_y)} Degrees, Rotation Z: {math.degrees(angle_z)} Degrees')
         print(f'Volume {i} Translation: Translation X: {translation_array[0]} mm, Translation Y: {translation_array[1]} mm, Translation Z: {translation_array[2]} mm')
@@ -131,7 +130,6 @@ def vvr(refVol, voldir):
     dirmapping = os.getcwd() + ":" + "/data"
     dockerprefix = ["docker","run","--rm", "-it", "--init", "-v", dirmapping,
         "--user", str(os.getuid())+":"+str(os.getgid())]
-    print(dockerprefix)
 
     inputTransformFileName = "identity-centered.tfm"
     subprocess.run( dockerprefix +  [ "crl/sms-mi-reg", "crl-identity-transform-at-volume-center.py", 
@@ -142,12 +140,23 @@ def vvr(refVol, voldir):
     for i, volname in enumerate(files):
         vol = os.path.join(voldir, volname)
         outTransFile = str(i).zfill(4)
-       
-        subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
-        refVol,
-        inputTransformFileName,
-        outTransFile,
-        vol] )
+
+        if i == 0:
+            firstVol = vol
+        elif i == 1:
+            subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
+            firstVol,
+            inputTransformFileName,
+            outTransFile,
+            vol] )
+        else: 
+            inputTransformFileName = f"sliceTransform{str(i - 1).zfill(4)}.tfm"
+
+            subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
+            refVol,
+            inputTransformFileName,
+            outTransFile,
+            vol] )
 
 
 def write_simulated_data(f, args, rot, trans, i, center):
@@ -224,8 +233,6 @@ def vol_to_slice(inVol, out_dir):
         writer.SetFileName(str(outPath))
         writer.Execute(roiVolume)
 
-    print("All slices saved successfully.")
-
     return sizes[2]
 
 
@@ -240,7 +247,6 @@ def svr(refVol, voldir, extension):
     dirmapping = os.getcwd() + ":" + "/data"
     dockerprefix = ["docker","run","--rm", "-it", "--init", "-v", dirmapping,
         "--user", str(os.getuid())+":"+str(os.getgid())]
-    print(dockerprefix)
 
     inputTransformFileName = "identity-centered.tfm"
     subprocess.run( dockerprefix +  [ "crl/sms-mi-reg", "crl-identity-transform-at-volume-center.py", 
@@ -254,11 +260,15 @@ def svr(refVol, voldir, extension):
         os.makedirs(slice_dir)
     
     acquisition_time, sms = aq_time_indices(refVol)
-    print(sms)
     slicelist = []
 
     for i, file in enumerate(files):
         filepath = os.path.join(voldir, file)
+
+        if i == 0:
+            firstVol = filepath
+            continue
+
         slicepath = os.path.join(slice_dir, f"slice{extension}")
 
         slice_num = vol_to_slice(filepath, slicepath)
@@ -272,11 +282,19 @@ def svr(refVol, voldir, extension):
                 slicelist.append(os.path.join(slice_dir, slices[index]))
 
             outTransFile = f"{str(i)}_{str(j).zfill(4)}"
+
+            if i == 1:
+                subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
+                firstVol,
+                inputTransformFileName,
+                outTransFile ] + slicelist )
+            else:
+                inputTransformFileName = f"sliceTransform{str(i - 1)}_{str(j).zfill(4)}.tfm"
+                subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
+                firstVol,
+                inputTransformFileName,
+                outTransFile ] + slicelist )
             
-            subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
-            refVol,
-            inputTransformFileName,
-            outTransFile ] + slicelist )
 
 
 def resample(args, extension):
@@ -301,13 +319,13 @@ if __name__ == '__main__':
 
     parser.add_argument('-inVol', default='./input/adultjosh.dcm', help='input folder with single dicom file that is duplicated')
     
-    parser.add_argument('-num_vols', default=40, type=int, help='number of output dicoms, default is 40')
+    parser.add_argument('-num_vols', default=41, type=int, help='number of output dicoms, default is 40')
 
     parser.add_argument('-angle_x', default=0, type=float, help='maximum angle of rotation in degrees x-axis (roll). Number can be integer or decimal')
     parser.add_argument('-angle_y', default=0, type=float, help='maximum angle of rotation in degrees, y-axis (pitch). Number can be integer or decimal')
     parser.add_argument('-angle_z', default=0, type=float, help='maximum angle of rotation in degrees, z-axis (yaw). Number can be integer or decimal')
 
-    parser.add_argument('-x', default=2, type=float, help='x-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
+    parser.add_argument('-x', default=12, type=float, help='x-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
     parser.add_argument('-y', default=0, type=float, help='y-axis translation sin wave magnitude. default is 0. Number can be integer or fldecimaloat')
     parser.add_argument('-z', default=0, type=float, help='z-axis translation sin wave magnitude. default is 0. Number can be integer or decimal')
 
@@ -349,7 +367,7 @@ if __name__ == '__main__':
         dirmapping_a = os.getcwd() + ":" + "/data"
         dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
 
-        subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "sliceTransform0000.tfm"])
+        subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "sliceTransform0001.tfm"])
         # Loop through files in the directory
         for filename in os.listdir(os.getcwd()):
             if filename.endswith(".tfm"):
@@ -365,7 +383,7 @@ if __name__ == '__main__':
         dirmapping_a = os.getcwd() + ":" + "/data"
         dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
 
-        subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "sliceTransform0_0000.tfm"])
+        subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "sliceTransform1_0000.tfm"])
         # Loop through files in the directory
         for filename in os.listdir(os.getcwd()):
             if filename.endswith(".tfm"):

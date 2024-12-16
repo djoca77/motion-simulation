@@ -7,6 +7,31 @@ import subprocess
 from pydicom import dcmread
 from scipy.spatial.transform import Rotation
 
+        
+def metadata(inVol, indirectory):
+    files = os.listdir(indirectory)
+    files.sort()
+    for i, file in enumerate(files):        
+        reference = dcmread(inVol)
+        dicom = dcmread(os.path.join(indirectory, file))
+        dicom.InstanceNumber = i + 1
+        for k in range(int(dicom.NumberOfFrames)):
+            dicom.PerFrameFunctionalGroupsSequence._list[k].add_new([0x0020, 0x9111], 'SQ', reference.PerFrameFunctionalGroupsSequence._list[k].FrameContentSequence)
+            dicom.PerFrameFunctionalGroupsSequence._list[k].add_new([0x0018, 0x9114], 'SQ', reference.PerFrameFunctionalGroupsSequence._list[k].MREchoSequence)
+            dicom.SharedFunctionalGroupsSequence._list[0].add_new([0x0018, 0x9112], 'SQ', reference.SharedFunctionalGroupsSequence._list[0].MRTimingAndRelatedParametersSequence)
+            dicom.PerFrameFunctionalGroupsSequence._list[k].add_new([0x0028, 0x9110], 'SQ', reference.PerFrameFunctionalGroupsSequence._list[k].PixelMeasuresSequence)
+            dicom.SharedFunctionalGroupsSequence._list[0].add_new([0x0018, 0x9115], 'SQ', reference.SharedFunctionalGroupsSequence._list[0].MRModifierSequence)
+            dicom.PerFrameFunctionalGroupsSequence._list[k].add_new([0x0020, 0x9116], 'SQ', reference.PerFrameFunctionalGroupsSequence._list[k].PlaneOrientationSequence)
+            dicom.PerFrameFunctionalGroupsSequence._list[k].PlaneOrientationSequence._list[0].ImageOrientationPatient._list = ['1','0','0','0','1','0']
+
+        # Save the new DICOM file
+        dicom_dir = 'slimm'
+        if not os.path.exists(dicom_dir):
+            os.makedirs(dicom_dir)
+        path = os.path.join(dicom_dir, f'slimm_{i}.dcm')
+        dicom.save_as(path)
+
+
 def interleaved_array(size, interleaved_factor):
     interleaved_array = []
     current_value = 0
@@ -24,6 +49,7 @@ def interleaved_array(size, interleaved_factor):
 
     return interleaved_array
 
+
 def aquisition_time(args):
     dcm = dcmread(args.invol)
     uSliceTime = np.empty(len(dcm.PerFrameFunctionalGroupsSequence))
@@ -38,7 +64,7 @@ def aquisition_time(args):
     return sortedSliceTime, sms
 
 
-def apply_translation(args, dir, extension):
+def apply_translation(args, dir, extension, iter):
     '''
     Resample volume in an interleaved manner, such that it follows a pattern like this for example: [0,20,1,21,2,22,3,23...]
     The output files are numbered in order, but correspond to a different slice than the number of the file. For example, 
@@ -137,9 +163,10 @@ def apply_translation(args, dir, extension):
     if not os.path.exists('intra_vol'):
         os.makedirs('intra_vol')
     
-    sitk.WriteImage(transformed_image, f'intra_vol/intra_vol{extension[1]}') #write intra-slice motion volume
+    sitk.WriteImage(transformed_image, f'intra_vol/intra_vol_{iter}{extension[1]}') #write intra-slice motion volume
     print('Slice Translations Complete')
     f.close()
+    
 
 def svr(refVol, slicedir, sms):
     #order files by name
@@ -199,6 +226,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--svr', action="store_true", help='Flag to perform slice to volume registration')
     parser.add_argument('--refplot', action='store_true', help='create plots of simulated data for a reference')
+    parser.add_argument('--slimm', action='store_true', help='flag to perform metadata regeneration on dicom images to use on slimm')
 
     args = parser.parse_args()
 
@@ -209,7 +237,12 @@ if __name__ == '__main__':
 
     extension = os.path.splitext(args.invol) #file extension name for writing purposes
 
-    apply_translation(args, directory, extension)
+    for i in range(5):
+        apply_translation(args, directory, extension, i) 
+
+    #only do metadata regeneration step if the file is a dicom
+    if extension[1] == '.dcm' and args.slimm:
+        metadata(args.invol, directory)
 
     #perform svr and motion monitor if the flag is used
     if args.svr:
