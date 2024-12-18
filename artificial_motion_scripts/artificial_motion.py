@@ -254,4 +254,3 @@ if __name__ == '__main__':
         for filename in os.listdir(os.getcwd()):
             if filename.endswith(".tfm"):
                 os.remove(filename)
-
