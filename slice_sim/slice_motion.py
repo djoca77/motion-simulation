@@ -7,6 +7,19 @@ import subprocess
 from pydicom import dcmread
 from scipy.spatial.transform import Rotation
 
+
+def write_simulated_data(f, args, rot, trans, i, center):
+        #resample slice using translation transform
+        transform_array = rot + trans
+        a = np.asarray(transform_array).reshape(1,-1)
+        np.savetxt(f, a, delimiter=",",fmt="%.8f")
+        
+        if args.refplot:
+            transform1 = sitk.VersorRigid3DTransform()
+            transform1.SetCenter(center) #center of rotation
+            transform1.SetParameters(transform_array)
+            sitk.WriteTransform(transform1, f'./{str(i).zfill(4)}.tfm')
+
         
 def metadata(inVol, indirectory):
     files = os.listdir(indirectory)
@@ -196,19 +209,6 @@ def svr(refVol, slicedir, sms):
         refVol,
         inputTransformFileName,
         outTransFile ] + slice_list )
-
-
-def write_simulated_data(f, args, rot, trans, i, center):
-        #resample slice using translation transform
-        transform_array = rot + trans
-        a = np.asarray(transform_array).reshape(1,-1)
-        np.savetxt(f, a, delimiter=",",fmt="%.8f")
-        
-        if args.refplot:
-            transform1 = sitk.VersorRigid3DTransform()
-            transform1.SetCenter(center) #center of rotation
-            transform1.SetParameters(transform_array)
-            sitk.WriteTransform(transform1, f'./{str(i).zfill(4)}.tfm')
 
 
 if __name__ == '__main__':
