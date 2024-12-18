@@ -77,7 +77,7 @@ def aquisition_time(args):
     return sortedSliceTime, sms
 
 
-def apply_motion(args, dir, extension, iter):
+def apply_motion(args, dir, extension):
     '''
     Resample volume in an interleaved manner, such that it follows a pattern like this for example: [0,20,1,21,2,22,3,23...]
     The output files are numbered in order, but correspond to a different slice than the number of the file. For example, 
@@ -176,7 +176,7 @@ def apply_motion(args, dir, extension, iter):
     if not os.path.exists('intra_vol'):
         os.makedirs('intra_vol')
     
-    sitk.WriteImage(transformed_image, f'intra_vol/intra_vol_{iter}{extension[1]}') #write intra-slice motion volume
+    sitk.WriteImage(transformed_image, f'intra_vol/intra_vol{extension[1]}') #write intra-slice motion volume
     print('Slice Translations Complete')
     f.close()
     
@@ -238,7 +238,7 @@ if __name__ == '__main__':
     extension = os.path.splitext(args.invol) #file extension name for writing purposes
 
 
-    apply_motion(args, directory, extension[1], i) 
+    apply_motion(args, directory, extension[1]) 
 
     #only do metadata regeneration step if the file is a dicom
     if extension[1] == '.dcm' and args.slimm:
