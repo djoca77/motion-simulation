@@ -68,6 +68,8 @@ def interleaved_array(size, interleaved_factor):
 
     param size: number of slices
     param interleaved_factor: interleaved factor specified by user
+
+    return interleaved array
     '''
     interleaved_array = []
     current_value = 0
@@ -93,6 +95,8 @@ def aquisition_time(inVol):
     therefore would be determined to be 2. This is done automatically, so sms_factor does not need to be specified
 
     param inVol: Input filename for dicom volume
+
+    return sorted array and sms factor
     '''
     dcm = dcmread(inVol)
     uSliceTime = np.empty(len(dcm.PerFrameFunctionalGroupsSequence))
@@ -229,6 +233,7 @@ def apply_motion(args, dir, extension):
         print(f'Slice Rotation {idx}, Rotation Z {math.degrees(angle_z)}')
         print('\n')
 
+        #change rotation parameters from euler to versor since sms-mi-reg is in versor
         rot = Rotation.from_euler('xyz', (0, 0, angle_z), degrees=False) #REMEMBER TO CHANGE THE DEGREES FLAG IF NEEDED
         rot_quat = rot.as_quat()
 

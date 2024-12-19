@@ -11,6 +11,13 @@ from pathlib import Path, PurePath
 
 
 def crop(image):
+    '''
+    Function that crops images in each direction. The numbers in the array correspond to however many pixels want to be cut off
+    
+    param image: image to crop
+
+    return cropped image
+    '''
     low = [25, 15, 0] # X, Y, Z pixels respectively
     up = [25, 8, 0] # X, Y, Z pixels respectively
     cropped = sitk.Crop(image, low, up)
@@ -19,29 +26,47 @@ def crop(image):
 
 
 def write_simulated_data(f, args, rot, trans, i, center):
-        #resample slice using translation transform
-        transform_array = rot + trans
-        a = np.asarray(transform_array).reshape(1,-1)
-        np.savetxt(f, a, delimiter=",",fmt="%.8f")
-        
-        if args.refplot:
-            transform1 = sitk.VersorRigid3DTransform()
-            transform1.SetCenter(center) #center of rotation
-            transform1.SetParameters(transform_array)
-            sitk.WriteTransform(transform1, f'./{str(i).zfill(4)}.tfm')
+    '''
+    Function that writes the 6 simulated motion parameters to a csv file and creates transform files for each slice or set of slices, all to create a reference plot, if the refplot flag is active
 
-            if i == (args.num_vols - 1):
-                dirmapping_a = os.getcwd() + ":" + "/data"
-                dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
+    param f: csv file
+    param refplot: flag for creating reference plot
+    param rot: 3 rotation parameters in versor representation
+    param trans: 3 translation parameters
+    param i: slice index to write transform file name
+    param center: fixed parameters to set center of rotation
+    '''
+    #resample slice using translation transform
+    transform_array = rot + trans
+    a = np.asarray(transform_array).reshape(1,-1)
+    np.savetxt(f, a, delimiter=",",fmt="%.8f")
+    
+    if args.refplot:
+        transform1 = sitk.VersorRigid3DTransform()
+        transform1.SetCenter(center) #center of rotation
+        transform1.SetParameters(transform_array)
+        sitk.WriteTransform(transform1, f'./{str(i).zfill(4)}.tfm')
 
-                subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "0000.tfm"])
-                # Loop through files in the directory
-                for filename in os.listdir(os.getcwd()):
-                    if filename.endswith(".tfm"):
-                        os.remove(filename)
+        #run motion monitor for artificial transform files once resampling on desired number of volumes is complete
+        if i == (args.num_vols - 1):
+            dirmapping_a = os.getcwd() + ":" + "/data"
+            dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
+
+            subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "0000.tfm"])
+            # Loop through files in the directory
+            for filename in os.listdir(os.getcwd()):
+                if filename.endswith(".tfm"):
+                    os.remove(filename)
 
 
 def metadata(inVol, indirectory):
+    '''
+    This function handles metadata generation of the artificial volumes generated. This has to be done because SITK does not handle the metadata fields well at all, and these specific fields are necessary for SLIMM
+    to function properly. More specifically, if you want to convert from dicom images to an MRD image for SLIMM these fields are needed. The dicom2mrd script will handle the rest
+
+    param inVol: reference volume that is used to populate the artificial image metadata
+    param indirectory: directory of artificial images
+    '''
     files = os.listdir(indirectory)
     files.sort()
     for i, file in enumerate(files):        
@@ -65,13 +90,20 @@ def metadata(inVol, indirectory):
         dicom.save_as(path)
 
 
-def resample(args, extension):
+def resample(numvols, extension):
+    '''
+    Use crlResampler to perform resampling using transform files. Important to note the resampling is done on the first
+    image, which has no motion whatsoever. The way it works is to move the reference to the moving image 
+    
+    param numvols: number of volumes to resample
+    param extension: file extension
+    '''
     # host computer : container directory alias
     dirmapping = os.getcwd() + ":" + "/data"
     dockerprefix = ["docker","run","--rm", "-it", "--init", "-v", dirmapping,
         "--user", str(os.getuid())+":"+str(os.getgid())]
     
-    for i in range(args.num_vols):        
+    for i in range(numvols):        
         subprocess.run(dockerprefix + ["crl/crkit", 
             "crlResampler", 
             "-d", 
@@ -81,6 +113,8 @@ def resample(args, extension):
             "bspline", 
             f"resampled/resampled_{i}.nii" 
         ])
+
+    #NOTE: image is always written as a nifti image to avoid metadata issues that arise with dicoms. This function is mainly for visual testing
 
 
 def aq_time_indices(refVol):
@@ -97,6 +131,15 @@ def aq_time_indices(refVol):
     return sortedSliceTime, sms
 
 def vol_to_slice(inVol, out_dir):
+    '''
+    takes input volume and splits into all its slices. slices are saved into out_dir. With multiple volumes, the slices are continually
+    overwritten which is fine for the purposes of testing SVR.
+
+    param inVol: input volume
+    param out_dir: directory for slices
+
+    return number of slices
+    '''
     # Read the input volume
     inVolume = sitk.ReadImage(inVol)
     dims = inVolume.GetDimension()
@@ -131,6 +174,14 @@ def vol_to_slice(inVol, out_dir):
 
 
 def interleaved_array(size, interleaved_factor):
+    '''
+    For HASTE images, in order to simulate acquisition order the interleaving factor can be specified and the slice order will be set based on that
+
+    param size: number of slices
+    param interleaved_factor: interleaved factor specified by user
+
+    return interleaved array
+    '''
     interleaved_array = []
     current_value = 0
     base_value = 0
@@ -149,6 +200,16 @@ def interleaved_array(size, interleaved_factor):
 
 
 def svr(refVol, voldir, extension):
+    '''
+    Perform Slice-to-Volume registration on the input volume and the modified slices to see how well sms-mi-reg does at tracking motion.
+    This SVR uses previous transform files as an initializing point for every volume after the first 2 (first volume has no motion and is used as reference, 2nd volume uses identity transform). 
+    This reduces time and increases accuracy of registration since it prevents algorithm getting stuck in a local minima if its registering an image with a lot of motion
+
+    param refVol: reference volume that the slices are registered to
+    param slicedir: directory of slices with artificial motion applied
+    param sms: sms factor that determines how many slices are input into sms-mi-reg at a time
+    
+    '''
     #order files by name
     files = os.listdir(voldir)
     files.sort()
@@ -179,16 +240,20 @@ def svr(refVol, voldir, extension):
     for i, file in enumerate(files):
         filepath = os.path.join(voldir, file)
 
+        #set variable to first file and continue to next iteration
         if i == 0:
             firstVol = filepath
             continue
 
+        #full path of slice directory
         slicepath = os.path.join(slice_dir, f"slice{extension}")
 
+        #generate slices and get number of slices, then list all slice paths and sort
         slice_num = vol_to_slice(filepath, slicepath)
         slices = os.listdir(slice_dir)
         slices.sort()
     
+        #loop through slices, pulling a number of slices based on sms factor
         for j in range(0, slice_num, sms):
             indices = acquisition_time[j:j + sms]
             slicelist = []
@@ -197,13 +262,14 @@ def svr(refVol, voldir, extension):
 
             outTransFile = f"{str(i).zfill(4)}_{str(j).zfill(4)}"
 
+            #only 2nd volume gets identity transform as starting point, every volume after uses previous.
             if i == 1:
                 subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
                 firstVol,
                 inputTransformFileName,
                 outTransFile ] + slicelist )
             else:
-                inputTransformFileName = f"sliceTransform{str(i - 1).zfill(4)}_{str(j).zfill(4)}.tfm"
+                inputTransformFileName = f"sliceTransform{str(i - 1).zfill(4)}_{str(j).zfill(4)}.tfm" #previous transform is previous volume's slice batch transform
                 subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
                 firstVol,
                 inputTransformFileName,
@@ -211,11 +277,16 @@ def svr(refVol, voldir, extension):
 
 
 def vvr(refVol, voldir):
+    '''
+    Perform Volume-to-Volume registration, using first volume (which has 0 motion) as reference. Uses previous transform file as input transform file. For example, vol 2 would use vol 1 transform file.
+    Vol 0 is used as reference, Vol 1 is registered from identity transform, Vol 2 uses Vol 1 transform file result as input, etc.
+
+    param refVol: reference volume
+    param voldir: output directory for volumes
+    '''
     # list all volume files and sort them in order
     files = os.listdir(voldir)
     files.sort()
-
-    print('refVolumeName is ', str(refVol) )
 
     # host computer : container directory alias
     dirmapping = os.getcwd() + ":" + "/data"
@@ -244,7 +315,7 @@ def vvr(refVol, voldir):
             inputTransformFileName = f"sliceTransform{str(i - 1).zfill(4)}.tfm"
 
             subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
-            refVol,
+            firstVol,
             inputTransformFileName,
             outTransFile,
             vol] )
@@ -252,7 +323,11 @@ def vvr(refVol, voldir):
 
 def apply_motion(args, dir, extension):
     """
-    Resample volume, creating a copy of the reference volume rotated in a sinusoidal fashion
+    Resample volume, creating a copy of the reference volume moved in sinusoidal fashion
+
+    param args: input args
+    param dir: directory to write volumes
+    param extensions: file extension of input volume
     """
 
     if os.path.exists('parameters.csv'):
@@ -265,7 +340,7 @@ def apply_motion(args, dir, extension):
         print("Input Image is not Valid") #throw an error otherwise
         exit(1)
 
-    #metadata
+    #metadata reading for SITK, still misses a lot
     reader = sitk.ImageFileReader()
     reader.SetFileName(args.inVol)
     reader.LoadPrivateTagsOn()
@@ -278,7 +353,9 @@ def apply_motion(args, dir, extension):
     for i in range(args.num_vols):        
         transform = sitk.AffineTransform(3)
 
-        sin = math.sin((args.period/args.num_vols) * (i) )
+        #creates sinusoidal pattern
+        sin = math.sin((args.period/args.num_vols) * i)
+
         translation_array = ((args.x * sin), (args.y * sin), (args.z * sin))
         transform.SetTranslation(translation_array)
 
@@ -305,6 +382,7 @@ def apply_motion(args, dir, extension):
         transform.SetMatrix(np.ravel(combined_rotation))
         transform.SetCenter(reference_center)
 
+        # Perform resampling 
         resampler = sitk.ResampleImageFilter()
         resampler.SetTransform(transform)
         resampler.SetOutputDirection(reference.GetDirection())
@@ -320,6 +398,7 @@ def apply_motion(args, dir, extension):
         if args.crop:
             transformed_image = crop(transformed_image)
 
+        #copy over as much metadata as possible
         for j in (reader.GetMetaDataKeys()):
             transformed_image.SetMetaData(j, reader.GetMetaData(j))
 
@@ -329,6 +408,7 @@ def apply_motion(args, dir, extension):
         print(f'Volume {i} Translation: Translation X: {translation_array[0]} mm, Translation Y: {translation_array[1]} mm, Translation Z: {translation_array[2]} mm')
         print("\n")
 
+        #change rotation parameters from euler to versor since sms-mi-reg is in versor
         rot = Rotation.from_euler('xyz', (angle_x, angle_y, angle_z), degrees=False) #REMEMBER TO CHANGE THE DEGREES FLAG IF NEEDED
         rot_quat = rot.as_quat()
 
@@ -386,7 +466,7 @@ if __name__ == '__main__':
         # Motion monitor
         os.remove("identity-centered.tfm")
 
-        if args.resample: resample(args, extension[1])
+        if args.resample: resample(args.num_vols, extension[1])
 
         dirmapping_a = os.getcwd() + ":" + "/data"
         dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
@@ -402,7 +482,7 @@ if __name__ == '__main__':
         # Motion monitor
         os.remove("identity-centered.tfm")
 
-        if args.resample: resample(args, extension[1])
+        if args.resample: resample(args.num_vols, extension[1])
 
         dirmapping_a = os.getcwd() + ":" + "/data"
         dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
