@@ -118,6 +118,15 @@ def resample(numvols, extension):
 
 
 def aq_time_indices(refVol):
+    '''
+    Based on the acquisition times of each slice in the volume, the array returned is the indices ordered by acquisition time from first to last. The sms factor is also ascertained from the acquistions times
+    For example, an array of acquisition times like [0.5, 1.5, 2.5, 3.5, 0.5, 1.5, 2.5, 3.5] will lead to an array [0,4,1,5,2,6,3,7] because slices 0 and 4 were acquired first and at the same time, etc. the sms factor
+    therefore would be determined to be 2. This is done automatically, so sms_factor does not need to be specified
+
+    param inVol: Input filename for dicom volume
+
+    return sorted array and sms factor
+    '''
     dcm = dcmread(refVol)
     uSliceTime = np.empty(len(dcm.PerFrameFunctionalGroupsSequence))
     for iSlice in range(len(dcm.PerFrameFunctionalGroupsSequence)):
@@ -303,15 +312,15 @@ def vvr(refVol, voldir):
         vol = os.path.join(voldir, volname)
         outTransFile = str(i).zfill(4)
 
-        if i == 0:
+        if i == 0: #set variable for first, unmoved volume and go to next iteration
             firstVol = vol
-        elif i == 1:
+        elif i == 1: #second volume uses identity transform
             subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
             firstVol,
             inputTransformFileName,
             outTransFile,
             vol] )
-        else: 
+        else: #every volume after uses previous volume tfm
             inputTransformFileName = f"sliceTransform{str(i - 1).zfill(4)}.tfm"
 
             subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
@@ -419,6 +428,10 @@ def apply_motion(args, dir, extension):
     
 
 if __name__ == '__main__':
+    '''
+    This script performs artificial motion resampling on a volumetric basis, creating as many volumes as desired. The motion applied is in all 6 parameters. 
+    There are then options to perform VVR or SVR on said volumes as well, along with using the transform files from the registration to resample the reference image to the moving one.
+    '''
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-inVol', default='./input/adultjosh.dcm', help='input folder with single dicom file that is duplicated')

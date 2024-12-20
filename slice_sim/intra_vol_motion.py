@@ -192,7 +192,7 @@ def apply_motion(args, dir, extension):
         image = sitk.RegionOfInterest(reference, sizeROI, startIndex)
         
         #create 3D array of sinusoidal motion to be applied translationally to slice
-        sin = math.sin(( 2 * math.pi / ( num_slices /  sms )) * ( i // sms)) #FOR SIMULTANEOUS ACQUISITION SIMULATION TAKES THE FLOOR SO IT GOES 0 0 1 1 2 2 3 3 ETC FOR SMS 2
+        sin = math.sin(( 2 * math.pi / ( num_slices /  sms )) * ( i // sms)) #FOR SIMULTANEOUS ACQUISITION SIMULATION TAKES THE FLOOR SO IT GOES 0 0 1 1 2 2 3 3 ETC FOR SMS 2 FOR EXAMPLE, SIMULATES SIMULTANEOUS SLICES HAVING SAME MOTION
         translation_array = ((args.x * sin), (args.y * sin), 0)
         transform = sitk.AffineTransform(3)
         transform.SetTranslation(translation_array)
