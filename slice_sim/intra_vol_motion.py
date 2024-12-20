@@ -19,11 +19,12 @@ def write_simulated_data(f, refplot, rot, trans, i, center):
     param i: slice index to write transform file name
     param center: fixed parameters to set center of rotation
     '''
-    #write transform
+    # Write parameters to csv
     transform_array = rot + trans
     a = np.asarray(transform_array).reshape(1,-1)
     np.savetxt(f, a, delimiter=",",fmt="%.8f")
     
+    # If the flag is active, create transform files for motion monitor to generate reference plot
     if refplot:
         transform1 = sitk.VersorRigid3DTransform()
         transform1.SetCenter(center) #center of rotation
@@ -177,7 +178,7 @@ def apply_motion(args, dir, extension):
     elif args.interleaved:
         #creates interleaved array depending on sms factor that determines the order of slices
         indices = interleaved_array(num_slices, args.interleaved_factor) 
-        sms = args.sms_factor
+        sms = 1
     else:
         #default is taking slices in order positionally from top to bottom with an sms factor of 1
         indices = list(range(num_slices)) 
@@ -274,9 +275,8 @@ if __name__ == '__main__':
     parser.add_argument('-y', default = 0, type=float, help='y-axis translation sin wave magnitude')
     parser.add_argument('-angle_z', default = 10, type=float, help='maximum angle of rotation in degrees, z-axis (yaw). Number can be integer or decimal')
 
-    parser.add_argument('-sms_factor', type=int, help='SMS factor. Important for proper motion simulation. Used for fMRI scans') 
-    parser.add_argument('-interleaved_factor', type=int, help='Interleaved factor. Must be divisible by the number of slices in the volume. Used for HASTE scans')
     parser.add_argument('--interleaved', action='store_true', help='Flag to add an interleaving factor to change the order of slices')
+    parser.add_argument('-interleaved_factor', type=int, help='Interleaved factor. Must be divisible by the number of slices in the volume. Used for HASTE scans')
     
     parser.add_argument('--svr', action="store_true", help='Flag to perform slice to volume registration')
     parser.add_argument('--refplot', action='store_true', help='create plots of simulated data for a reference')

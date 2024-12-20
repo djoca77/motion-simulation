@@ -1,0 +1,9 @@
+name: motion-pipeline
+dependencies:
+  - python=3.9
+  - pip
+  - pip:
+      - numpy
+      - pydicom
+      - scipy
+      - SimpleITK
