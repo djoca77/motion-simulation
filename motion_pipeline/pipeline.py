@@ -219,7 +219,7 @@ def svr(refVol, voldir, extension):
     param sms: sms factor that determines how many slices are input into sms-mi-reg at a time
     
     '''
-    #order files by name
+    # Rrder files by name
     files = os.listdir(voldir)
     files.sort()
 
@@ -235,8 +235,6 @@ def svr(refVol, voldir, extension):
     "--refvolume", refVol, 
     "--transformfile", inputTransformFileName ] )
 
-    # depending on sms factor, perform svr with slices, looping through until all slices have been registered
-
     slice_dir = "slices"
     if not os.path.exists(slice_dir):
         os.makedirs(slice_dir)
@@ -249,20 +247,20 @@ def svr(refVol, voldir, extension):
     for i, file in enumerate(files):
         filepath = os.path.join(voldir, file)
 
-        #set variable to first file and continue to next iteration
+        # Set variable to first file and continue to next iteration
         if i == 0:
             firstVol = filepath
             continue
 
-        #full path of slice directory
+        # Full path of slice directory
         slicepath = os.path.join(slice_dir, f"slice{extension}")
 
-        #generate slices and get number of slices, then list all slice paths and sort
+        # Generate slices and get number of slices, then list all slice paths and sort
         slice_num = vol_to_slice(filepath, slicepath)
         slices = os.listdir(slice_dir)
         slices.sort()
     
-        #loop through slices, pulling a number of slices based on sms factor
+        # Loop through slices, pulling a number of slices based on sms factor
         for j in range(0, slice_num, sms):
             indices = acquisition_time[j:j + sms]
             slicelist = []
@@ -271,14 +269,14 @@ def svr(refVol, voldir, extension):
 
             outTransFile = f"{str(i).zfill(4)}_{str(j).zfill(4)}"
 
-            #only 2nd volume gets identity transform as starting point, every volume after uses previous.
+            # Only 2nd volume gets identity transform as starting point, every volume after uses previous.
             if i == 1:
                 subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
                 firstVol,
                 inputTransformFileName,
                 outTransFile ] + slicelist )
             else:
-                inputTransformFileName = f"sliceTransform{str(i - 1).zfill(4)}_{str(j).zfill(4)}.tfm" #previous transform is previous volume's slice batch transform
+                inputTransformFileName = f"sliceTransform{str(i - 1).zfill(4)}_{str(j).zfill(4)}.tfm" # Previous transform is previous volume's slice batch transform
                 subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
                 firstVol,
                 inputTransformFileName,
@@ -293,7 +291,7 @@ def vvr(refVol, voldir):
     param refVol: reference volume
     param voldir: output directory for volumes
     '''
-    # list all volume files and sort them in order
+    # List all volume files and sort them in order
     files = os.listdir(voldir)
     files.sort()
 
@@ -312,15 +310,15 @@ def vvr(refVol, voldir):
         vol = os.path.join(voldir, volname)
         outTransFile = str(i).zfill(4)
 
-        if i == 0: #set variable for first, unmoved volume and go to next iteration
+        if i == 0: # Set variable for first, unmoved volume and go to next iteration
             firstVol = vol
-        elif i == 1: #second volume uses identity transform
+        elif i == 1: # Second volume uses identity transform
             subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
             firstVol,
             inputTransformFileName,
             outTransFile,
             vol] )
-        else: #every volume after uses previous volume tfm
+        else: # Every volume after uses previous volume tfm
             inputTransformFileName = f"sliceTransform{str(i - 1).zfill(4)}.tfm"
 
             subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
@@ -349,7 +347,7 @@ def apply_motion(args, dir, extension):
         print("Input Image is not Valid") #throw an error otherwise
         exit(1)
 
-    #metadata reading for SITK, still misses a lot
+    # Metadata reading for SITK, still misses a lot
     reader = sitk.ImageFileReader()
     reader.SetFileName(args.inVol)
     reader.LoadPrivateTagsOn()
@@ -407,7 +405,7 @@ def apply_motion(args, dir, extension):
         if args.crop:
             transformed_image = crop(transformed_image)
 
-        #copy over as much metadata as possible
+        # Copy over as much metadata as possible
         for j in (reader.GetMetaDataKeys()):
             transformed_image.SetMetaData(j, reader.GetMetaData(j))
 
@@ -417,11 +415,11 @@ def apply_motion(args, dir, extension):
         print(f'Volume {i} Translation: Translation X: {translation_array[0]} mm, Translation Y: {translation_array[1]} mm, Translation Z: {translation_array[2]} mm')
         print("\n")
 
-        #change rotation parameters from euler to versor since sms-mi-reg is in versor
+        # Change rotation parameters from euler to versor since sms-mi-reg is in versor
         rot = Rotation.from_euler('xyz', (angle_x, angle_y, angle_z), degrees=False) #REMEMBER TO CHANGE THE DEGREES FLAG IF NEEDED
         rot_quat = rot.as_quat()
 
-        # plot simulated motion transformations for a reference plot, only if the flag is used
+        # Plot simulated motion transformations for a reference plot, only if the flag is used
         write_simulated_data(f, args, list(rot_quat[0:3]), list(translation_array), i, reference_center)
 
     f.close()
@@ -429,7 +427,7 @@ def apply_motion(args, dir, extension):
 
 if __name__ == '__main__':
     '''
-    This script performs artificial motion resampling on a volumetric basis, creating as many volumes as desired. The motion applied is in all 6 parameters. 
+    This script performs artificial motion resampling on a volumetric basis, creating as many volumes as desired. The motion applied is in all 6 parameters, and follows a sinusoidal pattern. 
     There are then options to perform VVR or SVR on said volumes as well, along with using the transform files from the registration to resample the reference image to the moving one.
     '''
     parser = argparse.ArgumentParser()
@@ -457,22 +455,22 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # create output directory if it does not exist yet
+    # Create output directory if it does not exist yet
     directory = "simulated_vols"
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    #get file extension for saving purporses
+    # Get file extension for saving purporses
     extension = os.path.splitext(args.inVol)
 
-    # apply artificial rotation
+    # Apply artificial rotation
     apply_motion(args, directory, extension[1])
     
-    #only do metadata regeneration step if the file is a dicom
+    # Only do metadata regeneration step if the file is a dicom
     if extension[1] == '.dcm' and args.slimm:
         metadata(args.inVol, directory)
 
-    #perform vvr and motion monitor if the flag is used
+    # Perform vvr and motion monitor if the flag is used
     if args.vvr:
         vvr(args.inVol, directory)
     

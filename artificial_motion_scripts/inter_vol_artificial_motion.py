@@ -11,7 +11,11 @@ from scipy.spatial.transform import Rotation
 
 def apply_motion(args, dir, extension):
     """
-    Resample volume, creating a copy of the reference volume rotated in a sinusoidal fashion
+    Resample volume, creating a copy of the reference volume translated in a sinusoidal fashion
+
+    param args: input args
+    param dir: directory to write volumes
+    param extensions: file extension of input volume
     """
 
     if os.path.exists('parameters.csv'):
@@ -24,19 +28,18 @@ def apply_motion(args, dir, extension):
         print("Input Image is not Valid") #throw an error otherwise
         exit(1)
 
-    #metadata
+    # Read in Metadata
     reader = sitk.ImageFileReader()
     reader.SetFileName(args.inVol)
     reader.LoadPrivateTagsOn()
     reader.ReadImageInformation()
 
+    # Center of volume.
+    reference_center = reference.TransformContinuousIndexToPhysicalPoint(
+        [(index-1)/2.0 for index in reference.GetSize()] )
+    
     for i in range(args.num_vols):        
-        # Center of volume.
-        reference_center = reference.TransformContinuousIndexToPhysicalPoint(
-            [(index-1)/2.0 for index in reference.GetSize()] )
-
-        transform = sitk.AffineTransform(3)
-
+        # Set translation array
         sin = math.sin((args.period/args.num_vols) * i)
         translation_array = ((args.x * sin), (args.y * sin), (args.z * sin))
         transform.SetTranslation(translation_array)
@@ -61,9 +64,12 @@ def apply_motion(args, dir, extension):
 
         # Combine rotations: R = Rz * Ry * Rx (order matters)
         combined_rotation = np.dot(rotation_z, np.dot(rotation_y, rotation_x))
+
+        transform = sitk.AffineTransform(3)
         transform.SetMatrix(np.ravel(combined_rotation))
         transform.SetCenter(reference_center)
 
+        # Resample volume using parameters
         resampler = sitk.ResampleImageFilter()
         resampler.SetTransform(transform)
         resampler.SetOutputDirection(reference.GetDirection())
@@ -76,6 +82,7 @@ def apply_motion(args, dir, extension):
 
         transformed_image = resampler.Execute(reference)
 
+        # Regenerate metadata fields manually
         for j in (reader.GetMetaDataKeys()):
             transformed_image.SetMetaData(j, reader.GetMetaData(j))
 
@@ -85,16 +92,24 @@ def apply_motion(args, dir, extension):
         print(f'Volume {i} Translation: Translation X: {translation_array[0]} mm, Translation Y: {translation_array[1]} mm, Translation Z: {translation_array} mm')
         print("\n")
 
+        # Convert rotation parameters from euler to versor for more accurate comparison between reference plot and VVR plot
         rot = Rotation.from_euler('xyz', (angle_x, angle_y, angle_z), degrees=False) #REMEMBER TO CHANGE THE DEGREES FLAG IF NEEDED
         rot_quat = rot.as_quat()
 
-        # plot simulated motion transformations for a reference plot, only if the flag is used
+        # Plot simulated motion transformations for a reference plot, only if the flag is used
         write_simulated_data(f, args, list(rot_quat[0:3]), list(translation_array), i, reference_center)
 
     f.close()
 
 
 def metadata(inVol, indirectory):
+    '''
+    This function handles metadata generation of the artificial volumes generated. This has to be done because SITK does not handle the metadata fields well at all, and these specific fields are necessary for SLIMM
+    to function properly. More specifically, if you want to convert from dicom images to an MRD image for SLIMM these fields are needed. The dicom2mrd script will handle the rest
+
+    param inVol: reference volume that is used to populate the artificial image metadata
+    param indirectory: directory of artificial images
+    '''
     files = os.listdir(indirectory)
     files.sort()
     for i, file in enumerate(files):        
@@ -119,11 +134,16 @@ def metadata(inVol, indirectory):
 
 
 def vvr(refVol, voldir):
+    '''
+    Perform Volume-to-Volume registration, using first volume (which has 0 motion) as reference. Uses previous transform file as input transform file. For example, vol 2 would use vol 1 transform file.
+    Vol 0 is used as reference, Vol 1 is registered from identity transform, Vol 2 uses Vol 1 transform file result as input, etc.
+
+    param refVol: reference volume
+    param voldir: output directory for volumes
+    '''
     # list all volume files and sort them in order
     files = os.listdir(voldir)
     files.sort()
-
-    print('refVolumeName is ', str(refVol) )
 
     # host computer : container directory alias
     dirmapping = os.getcwd() + ":" + "/data"
@@ -140,66 +160,62 @@ def vvr(refVol, voldir):
         vol = os.path.join(voldir, volname)
         outTransFile = str(i).zfill(4)
 
-        if i == 0:
+        if i == 0: #set variable for first, unmoved volume and go to next iteration
             firstVol = vol
-        elif i == 1:
+        elif i == 1: #second volume uses identity transform
             subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
             firstVol,
             inputTransformFileName,
             outTransFile,
             vol] )
-        else: 
+        else: #every volume after uses previous volume tfm
             inputTransformFileName = f"sliceTransform{str(i - 1).zfill(4)}.tfm"
 
             subprocess.run( dockerprefix + ["crl/sms-mi-reg", "sms-mi-reg", 
-            refVol,
+            firstVol,
             inputTransformFileName,
             outTransFile,
             vol] )
 
 
 def write_simulated_data(f, args, rot, trans, i, center):
-        #resample slice using translation transform
-        transform_array = rot + trans
-        a = np.asarray(transform_array).reshape(1,-1)
-        np.savetxt(f, a, delimiter=",",fmt="%.8f")
-        
-        if args.refplot:
-            transform1 = sitk.VersorRigid3DTransform()
-            transform1.SetCenter(center) #center of rotation
-            transform1.SetParameters(transform_array)
-            sitk.WriteTransform(transform1, f'./{str(i).zfill(4)}.tfm')
+    '''
+    Function that writes the 6 simulated motion parameters to a csv file and creates transform files for each slice or set of slices, all to create a reference plot, if the refplot flag is active
 
-            if i == (args.num_vols - 1):
-                dirmapping_a = os.getcwd() + ":" + "/data"
-                dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
-
-                subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "0000.tfm"])
-                # Loop through files in the directory
-                for filename in os.listdir(os.getcwd()):
-                    if filename.endswith(".tfm"):
-                        os.remove(filename)
-
-
-def resample(args, extension):
-    # host computer : container directory alias
-    dirmapping = os.getcwd() + ":" + "/data"
-    dockerprefix = ["docker","run","--rm", "-it", "--init", "-v", dirmapping,
-        "--user", str(os.getuid())+":"+str(os.getgid())]
+    param f: csv file
+    param args: input args
+    param rot: rotation parameters
+    param trans: translation parameters
+    param i: slice index to write transform file name
+    param center: fixed parameters to set center of rotation
+    '''
+    # Write to csv files the 6 parameters
+    transform_array = rot + trans
+    a = np.asarray(transform_array).reshape(1,-1)
+    np.savetxt(f, a, delimiter=",",fmt="%.8f")
     
-    for i in range(args.num_vols):        
-        subprocess.run(dockerprefix + ["crl/crkit", 
-            "crlResampler", 
-            "-d", 
-            f"simulated_vols/simulated_0000{extension}",
-            f"sliceTransform{str(i).zfill(4)}.tfm", 
-            f"simulated_vols/simulated_0000.dcm{extension}", 
-            "bspline", 
-            f"resampled/resampled_{i}.nii" 
-        ])
+    # Run motion monitor for artificial transform files once resampling on desired number of volumes is complete
+    if args.refplot:
+        transform1 = sitk.VersorRigid3DTransform()
+        transform1.SetCenter(center) #center of rotation
+        transform1.SetParameters(transform_array)
+        sitk.WriteTransform(transform1, f'./{str(i).zfill(4)}.tfm')
+
+        if i == (args.num_vols - 1):
+            dirmapping_a = os.getcwd() + ":" + "/data"
+            dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
+
+            subprocess.run( dockerprefix_a + ["jauger/motion-monitor:latest", "0000.tfm"])
+            # Loop through files in the directory
+            for filename in os.listdir(os.getcwd()):
+                if filename.endswith(".tfm"):
+                    os.remove(filename)
 
 
 if __name__ == '__main__':
+    '''
+    Script that performs both translation and rotation on image. Option to perform VVR as well
+    '''
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-inVol', default='./input/adultjosh.dcm', help='input folder with single dicom file that is duplicated')
@@ -222,29 +238,27 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # create output directory if it does not exist yet
+    # Create output directory if it does not exist yet
     directory = "simulated_vols"
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    #get file extension for saving purporses
+    # Get file extension for saving purporses
     extension = os.path.splitext(args.inVol)
 
-    # apply artificial rotation
+    # Apply artificial motion
     apply_motion(args, directory, extension[1])
     
-    #only do metadata regeneration step if the file is a dicom
+    # Only do metadata regeneration step if the file is a dicom
     if extension[1] == '.dcm' and args.slimm:
         metadata(args.inVol, directory)
 
-    #perform vvr and motion monitor if the flag is used
+    # Perform vvr and motion monitor if the flag is used
     if args.vvr:
         vvr(args.inVol, directory)
     
         # Motion monitor
         os.remove("identity-centered.tfm")
-
-        resample(args, extension[1])
 
         dirmapping_a = os.getcwd() + ":" + "/data"
         dockerprefix_a = ["docker","run","--rm", "-it", "--init", "-v", dirmapping_a, "--user", str(os.getuid())+":"+str(os.getgid())]
