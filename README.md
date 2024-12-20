@@ -12,3 +12,9 @@ This is a motion simulation pipeline that can simulate translation and rotation.
 - artificial_rotation.py: Performs volume level rotation motion simulation with the option to perform VVR
 - artificial_translation.py: Performs volume level translation motion simulation with the option to perform VVR
 - inter_vol_artificial_motion: Performs volume level translation and rotation motion simulation with the option to perform VVR
+
+# Docker images
+Certain docker images are needed for proper functionality of registration and motion monitoring
+- crl/sms-mi-reg instructions: https://ccts3.aws.chboston.org/computationalradiology/sms-mi-reg 
+- crl/crkit instructions: https://ccts3.aws.chboston.org/computationalradiology/crkit 
+- jauger/motion-monitor instructions: https://github.com/josh-auger/motion-monitor
